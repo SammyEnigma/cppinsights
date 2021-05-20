@@ -58,7 +58,7 @@ static std::string AccessToStringWithColon(const FunctionDecl& decl)
 
 static const char* GetCastName(const CastKind castKind)
 {
-    if(CastKind::CK_BitCast == castKind) {
+    if(is{castKind}.any_of(CastKind::CK_BitCast, CastKind::CK_IntegralToPointer)) {
         return "reinterpret_cast";
     }
 
@@ -1483,7 +1483,7 @@ void CodeGenerator::InsertArg(const ImplicitCastExpr* stmt)
         }
     };
 
-    if(not isMatchingCast(castKind, hideImplicitCasts, ShowXValueCasts())) {
+    if(not isMatchingCast(castKind, hideImplicitCasts, stmt->isXValue() || ShowXValueCasts())) {
         InsertArg(subExpr);
     } else if(isa<IntegerLiteral>(subExpr) && hideImplicitCasts) {
         InsertArg(stmt->IgnoreCasts());
@@ -1579,7 +1579,15 @@ void CodeGenerator::InsertArg(const IfStmt* stmt)
 
     mOutputFormatHelper.Append("if", cexpr);
 
-    WrapInParens([&]() { InsertArg(stmt->getCond()); }, AddSpaceAtTheEnd::Yes);
+    WrapInParens(
+        [&]() {
+            mShowConstantExprValue = ShowConstantExprValue::Yes;
+
+            InsertArg(stmt->getCond());
+
+            mShowConstantExprValue = ShowConstantExprValue::No;
+        },
+        AddSpaceAtTheEnd::Yes);
 
     WrapInCompoundIfNeeded(stmt->getThen(), AddNewLineAfter::No);
 
@@ -2086,6 +2094,13 @@ void CodeGenerator::InsertArg(const CXXThrowExpr* stmt)
 
 void CodeGenerator::InsertArg(const ConstantExpr* stmt)
 {
+    if((ShowConstantExprValue::Yes == mShowConstantExprValue) && stmt->hasAPValueResult()) {
+        if(const auto value = stmt->getAPValueResult(); value.isInt()) {
+            mOutputFormatHelper.Append(value.getInt());
+            return;
+        }
+    }
+
     InsertArg(stmt->getSubExpr());
 }
 //-----------------------------------------------------------------------------
@@ -3148,7 +3163,7 @@ void CodeGenerator::FormatCast(const std::string castName,
                                const Expr*       subExpr,
                                const CastKind&   castKind)
 {
-    const bool        isCastToBase{((castKind == CK_DerivedToBase) || (castKind == CK_UncheckedDerivedToBase)) &&
+    const bool        isCastToBase{is{castKind}.any_of(CK_DerivedToBase, CK_UncheckedDerivedToBase) &&
                             castDestType->isRecordType()};
     const std::string castDestTypeText{
         StrCat(GetName(castDestType), ((isCastToBase && !castDestType->isAnyPointerType()) ? "&" : ""))};
